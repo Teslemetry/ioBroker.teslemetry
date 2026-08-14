@@ -1,15 +1,19 @@
 {
-  "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "./build",
     "rootDir": ".",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "types": ["node"],
-    "paths": {
-      "@teslemetry/api": ["../api/dist"]
-    }
+    "types": ["node"]
   },
   "include": ["src/**/*", "lib/**/*", "test/**/*"],
   "exclude": ["node_modules", "build"]
