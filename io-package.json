@@ -16,19 +16,6 @@
         "uk": "Оновлення залежностей",
         "zh-cn": "依赖更新"
       },
-      "0.2.4": {
-        "en": "Dependency updates",
-        "de": "Abhängigkeiten aktualisiert",
-        "ru": "Обновления зависимостей",
-        "pt": "Atualizações de dependências",
-        "nl": "Afhankelijkheden bijgewerkt",
-        "fr": "Mises à jour des dépendances",
-        "it": "Aggiornamenti delle dipendenze",
-        "es": "Actualizaciones de dependencias",
-        "pl": "Aktualizacje zależności",
-        "uk": "Оновлення залежностей",
-        "zh-cn": "依赖更新"
-      },
       "0.2.3": {
         "en": "Dependency updates",
         "de": "Abhängigkeiten aktualisiert",
@@ -135,8 +122,8 @@
     "platform": "Javascript/Node.js",
     "icon": "teslemetry.png",
     "enabled": true,
-    "extIcon": "https://raw.githubusercontent.com/Teslemetry/typescript-teslemetry/main/packages/iobroker.teslemetry/admin/teslemetry.png",
-    "readme": "https://github.com/Teslemetry/typescript-teslemetry/blob/main/packages/iobroker.teslemetry/README.md",
+    "extIcon": "https://raw.githubusercontent.com/Teslemetry/ioBroker.teslemetry/main/admin/teslemetry.png",
+    "readme": "https://github.com/Teslemetry/ioBroker.teslemetry/blob/main/README.md",
     "loglevel": "info",
     "mode": "daemon",
     "type": "iot-systems",
@@ -162,8 +149,12 @@
       "license": "Apache-2.0"
     }
   },
-  "protectedNative": ["accessToken"],
-  "encryptedNative": ["accessToken"],
+  "protectedNative": [
+    "accessToken"
+  ],
+  "encryptedNative": [
+    "accessToken"
+  ],
   "native": {
     "accessToken": "",
     "region": "auto",

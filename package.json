@@ -6,7 +6,7 @@
     "name": "Teslemetry",
     "email": "hello@teslemetry.com"
   },
-  "homepage": "https://github.com/Teslemetry/typescript-teslemetry",
+  "homepage": "https://github.com/Teslemetry/ioBroker.teslemetry",
   "license": "Apache-2.0",
   "keywords": [
     "ioBroker",
@@ -20,8 +20,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Teslemetry/typescript-teslemetry.git",
-    "directory": "packages/iobroker.teslemetry"
+    "url": "https://github.com/Teslemetry/ioBroker.teslemetry.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Teslemetry/ioBroker.teslemetry/issues"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -35,6 +37,9 @@
     "build": "tsdown src/main.ts lib/*.ts --format cjs --target node20 --clean --outDir build",
     "watch": "tsdown src/main.ts lib/*.ts --format cjs --target node20 --watch --outDir build",
     "test": "tsx --test test/*.test.ts",
+    "test:unit": "tsx --test test/*.test.ts",
+    "test:package": "tsx --test test/packageVersionParity.test.ts",
+    "test:integration": "echo 'No @iobroker/testing integration harness configured for this adapter yet'",
     "coverage": "nyc npm test",
     "lint": "oxlint .",
     "check": "tsc --noEmit"
@@ -43,18 +48,18 @@
   "files": [
     "admin/",
     "build/",
-    "docs/",
     "io-package.json",
     "LICENSE"
   ],
   "dependencies": {
     "@iobroker/adapter-core": "^3.4.1",
-    "@teslemetry/api": "workspace:*"
+    "@teslemetry/api": "^0.11.3"
   },
   "devDependencies": {
     "@iobroker/testing": "^5.2.2",
     "@types/node": "^22.10.2",
     "nyc": "^17.1.0",
+    "oxlint": "^1.73.0",
     "tsdown": "^0.22.4",
     "tsx": "^4.20.6",
     "typescript": "^7.0.2"

@@ -2,7 +2,7 @@
 
 [![NPM version](https://img.shields.io/npm/v/iobroker.teslemetry.svg)](https://www.npmjs.com/package/iobroker.teslemetry)
 [![Downloads](https://img.shields.io/npm/dm/iobroker.teslemetry.svg)](https://www.npmjs.com/package/iobroker.teslemetry)
-[![License](https://img.shields.io/npm/l/iobroker.teslemetry.svg)](https://github.com/Teslemetry/typescript-teslemetry/blob/main/LICENSE)
+[![License](https://img.shields.io/npm/l/iobroker.teslemetry.svg)](https://github.com/Teslemetry/ioBroker.teslemetry/blob/main/LICENSE)
 
 ioBroker adapter for controlling Tesla vehicles and energy sites via the Teslemetry API.
 
@@ -316,26 +316,23 @@ A: Streaming provides real-time updates as they happen. Polling checks for updat
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/Teslemetry/typescript-teslemetry/issues)
+- **Issues**: [GitHub Issues](https://github.com/Teslemetry/ioBroker.teslemetry/issues)
 - **Documentation**: [Teslemetry API Docs](https://teslemetry.com/docs)
 - **Forum**: [ioBroker Forum](https://forum.iobroker.net)
 
 ## Development
 
-This adapter is part of the [Teslemetry TypeScript monorepo](https://github.com/Teslemetry/typescript-teslemetry).
-
 ### Building
 
 ```bash
-cd packages/iobroker.teslemetry
-pnpm install
-pnpm build
+npm install
+npm run build
 ```
 
 ### Testing
 
 ```bash
-pnpm test
+npm test
 ```
 
 ## Changelog
