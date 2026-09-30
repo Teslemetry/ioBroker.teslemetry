@@ -1,6 +1,20 @@
 import { Teslemetry, TeslemetryVehicleApi } from '@teslemetry/api';
 import { StateManager } from './StateManager.js';
 
+// Reasons Tesla gives with `result: false` when the vehicle is already in the
+// requested state or has accepted the request; they are not failures.
+const BENIGN_REASONS = new Set(['already_set', 'not_charging', 'requested']);
+
+/**
+ * The API answers a command the vehicle refused with HTTP 200 and
+ * `result: false`, so a resolved promise alone does not mean it was applied.
+ */
+function assertAccepted(result: { response?: { result?: boolean; reason?: string } }): void {
+	const response = result?.response;
+	if (response?.result !== false || BENIGN_REASONS.has(response.reason ?? '')) return;
+	throw new Error(`Command refused by the vehicle: ${response.reason || 'no reason given'}`);
+}
+
 export class VehicleHandler {
 	private vehicles: Map<string, TeslemetryVehicleApi> = new Map();
 
@@ -28,7 +42,7 @@ export class VehicleHandler {
 	private async writeAndReconcile(id: string, value: any, write: () => Promise<any>): Promise<void> {
 		const prior = await this.adapter.getStateAsync(id);
 		try {
-			await write();
+			assertAccepted(await write());
 		} catch (error) {
 			await this.adapter.setStateAsync(id, prior?.val ?? null, true);
 			throw error;
@@ -75,38 +89,51 @@ export class VehicleHandler {
 				break;
 
 			case 'start_charging':
-				await vehicle.startCharging();
+				assertAccepted(await vehicle.startCharging());
 				this.adapter.log.info(`Started charging for vehicle ${vin}`);
 				break;
 
 			case 'stop_charging':
-				await vehicle.stopCharging();
+				assertAccepted(await vehicle.stopCharging());
 				this.adapter.log.info(`Stopped charging for vehicle ${vin}`);
 				break;
 
 			case 'flash_lights':
-				await vehicle.flashLights();
+				assertAccepted(await vehicle.flashLights());
 				this.adapter.log.info(`Flashed lights for vehicle ${vin}`);
 				break;
 
 			case 'honk_horn':
-				await vehicle.honkHorn();
+				assertAccepted(await vehicle.honkHorn());
 				this.adapter.log.info(`Honked horn for vehicle ${vin}`);
 				break;
 
 			case 'open_frunk':
-				await vehicle.actuateTrunk('front');
-				this.adapter.log.info(`Opened frunk for vehicle ${vin}`);
+				await this.openTrunk(vin, vehicle, 'front');
 				break;
 
 			case 'open_trunk':
-				await vehicle.actuateTrunk('rear');
-				this.adapter.log.info(`Opened trunk for vehicle ${vin}`);
+				await this.openTrunk(vin, vehicle, 'rear');
 				break;
 
 			default:
 				this.adapter.log.warn(`Unknown command: ${command}`);
 		}
+	}
+
+	/**
+	 * actuate_trunk is a toggle, so it is not sent when the stream reports the
+	 * trunk already open. An unknown state still sends it.
+	 */
+	private async openTrunk(vin: string, vehicle: TeslemetryVehicleApi, which: 'front' | 'rear'): Promise<void> {
+		const name = which === 'front' ? 'frunk' : 'trunk';
+		const doors = this.teslemetry.sse.cache[vin]?.data?.DoorState;
+		if (doors?.[which === 'front' ? 'TrunkFront' : 'TrunkRear'] === true) {
+			this.adapter.log.info(`The ${name} of vehicle ${vin} is already open, command not sent`);
+			return;
+		}
+		assertAccepted(await vehicle.actuateTrunk(which));
+		this.adapter.log.info(`Opened ${name} for vehicle ${vin}`);
 	}
 
 	/**
@@ -121,8 +148,13 @@ export class VehicleHandler {
 
 		// Handle commands
 		if (category === 'commands') {
-			if (value === true || value === 'true') {
-				await this.executeCommand(vin, stateName);
+			try {
+				if (value === true || value === 'true') {
+					await this.executeCommand(vin, stateName);
+				}
+			} finally {
+				// A button holds no value: acknowledge the press and reset it, whatever the outcome.
+				await this.adapter.setStateAsync(`vehicles.${vin}.commands.${stateName}`, false, true);
 			}
 			return;
 		}
