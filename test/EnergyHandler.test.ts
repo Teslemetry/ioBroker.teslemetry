@@ -128,3 +128,22 @@ test('fetchSiteData calls getLiveStatus()/getSiteInfo() and updates states from 
 	assert.equal(states.get(`energy.${SITE_ID}.operation.backup_reserve_percent`), 20);
 	assert.equal(states.get(`energy.${SITE_ID}.tariff.tariff_id`), 'PGE-EV2-A');
 });
+
+test('fetchSiteData logs the API\'s error_description and reports failure (regression: logged "undefined")', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const site = teslemetry.api.getEnergySite(SITE_ID);
+	// The SDK rejects with the parsed response body, not an Error.
+	(site as any).getLiveStatus = () =>
+		Promise.reject({ response: null, error: 'payment_required', error_description: 'Subscription required' });
+	(site as any).getSiteInfo = () => Promise.resolve({ response: {} });
+
+	const { adapter, logs } = createFakeAdapter();
+	const handler = new EnergyHandler(adapter, teslemetry, new StateManager(adapter));
+	handler.registerSite(SITE_ID);
+
+	assert.deepEqual(await handler.fetchAllSiteData(), [false]);
+	assert.deepEqual(
+		logs.filter((l) => l.level === 'error').map((l) => l.message),
+		[`Error fetching data for site ${SITE_ID}: Subscription required`]
+	);
+});

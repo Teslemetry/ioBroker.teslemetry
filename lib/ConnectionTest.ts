@@ -1,3 +1,5 @@
+import { describeError } from './errors.js';
+
 interface Products {
 	vehicles: Record<string, { name: string }>;
 	energySites: Record<string, { name: string }>;
@@ -31,9 +33,7 @@ export async function testConnection(
 				...(sites.length ? [`Energy sites: ${sites.join(', ')}`] : []),
 			].join('\n'),
 		};
-	} catch (error: any) {
-		// The SDK rejects with the API's response body, which is not an Error.
-		const reason = error?.error_description ?? error?.error ?? error?.message ?? String(error);
-		return { error: `Connection failed: ${reason}` };
+	} catch (error) {
+		return { error: `Connection failed: ${describeError(error)}` };
 	}
 }

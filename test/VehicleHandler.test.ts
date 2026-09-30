@@ -330,3 +330,33 @@ test('fetchVehicleData reads state from the response wrapper and skips vehicleDa
 	assert.equal(states.get(`vehicles.${VIN}._info.state`), 'asleep');
 	assert.equal(vehicleDataCalled, false);
 });
+
+test('fetchVehicleData logs the API\'s error_description and reports failure (regression: logged "undefined")', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const vehicle = teslemetry.api.getVehicle(VIN);
+	// The SDK rejects with the parsed response body, not an Error.
+	(vehicle as any).state = () =>
+		Promise.reject({ response: null, error: 'payment_required', error_description: 'Subscription required' });
+
+	const { adapter, logs } = createFakeAdapter();
+	const handler = new VehicleHandler(adapter, teslemetry, new StateManager(adapter));
+	handler.registerVehicle(VIN);
+
+	assert.deepEqual(await handler.fetchAllVehicleData(false), [false]);
+	assert.deepEqual(
+		logs.filter((l) => l.level === 'error').map((l) => l.message),
+		[`Error fetching data for vehicle ${VIN}: Subscription required`]
+	);
+});
+
+test('fetchAllVehicleData reports success for an asleep vehicle (the API answered)', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const vehicle = teslemetry.api.getVehicle(VIN);
+	(vehicle as any).state = () => Promise.resolve({ response: { state: 'asleep' } });
+
+	const { adapter } = createFakeAdapter();
+	const handler = new VehicleHandler(adapter, teslemetry, new StateManager(adapter));
+	handler.registerVehicle(VIN);
+
+	assert.deepEqual(await handler.fetchAllVehicleData(false), [true]);
+});
