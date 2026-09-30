@@ -96,3 +96,31 @@ test('updateEnergySiteData surfaces tariff_id/tariff_content/tariff_content_v2 f
 		JSON.stringify({ code: 'PGE-EV2-A', utility: 'PG&E', currency: 'USD' })
 	);
 });
+
+test('writable states carry the limits and value lists the API enforces', async () => {
+	const { adapter, objects } = createFakeAdapter();
+	const stateManager = new StateManager(adapter);
+	await stateManager.createVehicleStates({ vin: 'VIN1', display_name: 'Test Car' });
+	await stateManager.createEnergySiteStates({ id: 42, site_name: 'Home' });
+
+	const common = (id: string) => objects.get(id).common;
+	assert.partialDeepStrictEqual(common('vehicles.VIN1.charge.charge_limit_soc'), { min: 50, max: 100, step: 1 });
+	assert.partialDeepStrictEqual(common('vehicles.VIN1.climate.driver_temp_setting'), { min: 15, max: 28, step: 0.5 });
+	assert.partialDeepStrictEqual(common('vehicles.VIN1.climate.passenger_temp_setting'), { min: 15, max: 28, step: 0.5 });
+	assert.partialDeepStrictEqual(common('energy.42.operation.backup_reserve_percent'), { min: 0, max: 100 });
+	assert.partialDeepStrictEqual(common('energy.42.operation.off_grid_reserve_percent'), { min: 0, max: 100 });
+	assert.deepEqual(Object.keys(common('energy.42.operation.mode').states).sort(), ['autonomous', 'backup', 'self_consumption']);
+});
+
+test('limits reach a writable state whose object an earlier version already created', async () => {
+	const { adapter, objects } = createFakeAdapter();
+	objects.set('vehicles.VIN1.charge.charge_limit_soc', {
+		type: 'state',
+		common: { name: 'Charge Limit', type: 'number', role: 'level.battery', read: true, write: true, def: 80, unit: '%' },
+		native: {},
+	});
+
+	await new StateManager(adapter).createVehicleStates({ vin: 'VIN1', display_name: 'Test Car' });
+
+	assert.partialDeepStrictEqual(objects.get('vehicles.VIN1.charge.charge_limit_soc').common, { name: 'Charge Limit', min: 50, max: 100 });
+});

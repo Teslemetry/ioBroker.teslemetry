@@ -3,7 +3,7 @@
 // real js-controller.
 export function createFakeAdapter(namespace = 'teslemetry.0') {
 	const states = new Map<string, any>();
-	const objects = new Set<string>();
+	const objects = new Map<string, any>();
 	const logs: Array<{ level: 'info' | 'warn' | 'error' | 'debug'; message: string }> = [];
 
 	const adapter = {
@@ -20,8 +20,12 @@ export function createFakeAdapter(namespace = 'teslemetry.0') {
 		async getStateAsync(id: string) {
 			return states.has(id) ? { val: states.get(id) } : null;
 		},
-		async setObjectNotExistsAsync(id: string) {
-			objects.add(id);
+		async setObjectNotExistsAsync(id: string, obj: any) {
+			if (!objects.has(id)) objects.set(id, obj);
+		},
+		async extendObjectAsync(id: string, obj: any) {
+			const existing = objects.get(id) ?? {};
+			objects.set(id, { ...existing, ...obj, common: { ...existing.common, ...obj.common } });
 		},
 	};
 

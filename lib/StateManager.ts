@@ -53,8 +53,8 @@ export class StateManager {
 		await this.createChannel(`${base}.climate`, 'Climate');
 		await this.createState(`${base}.climate.inside_temp`, 'Inside Temperature', 'number', 'value.temperature', true, false, 0, '°C');
 		await this.createState(`${base}.climate.outside_temp`, 'Outside Temperature', 'number', 'value.temperature', true, false, 0, '°C');
-		await this.createState(`${base}.climate.driver_temp_setting`, 'Driver Temperature Setting', 'number', 'level.temperature', true, true, 21, '°C');
-		await this.createState(`${base}.climate.passenger_temp_setting`, 'Passenger Temperature Setting', 'number', 'level.temperature', true, true, 21, '°C');
+		await this.createState(`${base}.climate.driver_temp_setting`, 'Driver Temperature Setting', 'number', 'level.temperature', true, true, 21, '°C', { min: 15, max: 28, step: 0.5 });
+		await this.createState(`${base}.climate.passenger_temp_setting`, 'Passenger Temperature Setting', 'number', 'level.temperature', true, true, 21, '°C', { min: 15, max: 28, step: 0.5 });
 		await this.createState(`${base}.climate.is_climate_on`, 'Climate On', 'boolean', 'indicator.climate', true, false, false);
 		await this.createState(`${base}.climate.is_preconditioning`, 'Preconditioning', 'boolean', 'indicator', true, false, false);
 
@@ -63,7 +63,7 @@ export class StateManager {
 		await this.createState(`${base}.charge.battery_level`, 'Battery Level', 'number', 'value.battery', true, false, 0, '%');
 		await this.createState(`${base}.charge.usable_battery_level`, 'Usable Battery Level', 'number', 'value.battery', true, false, 0, '%');
 		await this.createState(`${base}.charge.charging_state`, 'Charging State', 'string', 'text', true, false, 'Disconnected');
-		await this.createState(`${base}.charge.charge_limit_soc`, 'Charge Limit', 'number', 'level.battery', true, true, 80, '%');
+		await this.createState(`${base}.charge.charge_limit_soc`, 'Charge Limit', 'number', 'level.battery', true, true, 80, '%', { min: 50, max: 100, step: 1 });
 		await this.createState(`${base}.charge.charge_rate`, 'Charge Rate', 'number', 'value.power', true, false, 0, 'km/h');
 		await this.createState(`${base}.charge.charger_power`, 'Charger Power', 'number', 'value.power', true, false, 0, 'kW');
 		await this.createState(`${base}.charge.time_to_full_charge`, 'Time to Full Charge', 'number', 'value.interval', true, false, 0, 'h');
@@ -138,9 +138,11 @@ export class StateManager {
 
 		// Operation channel
 		await this.createChannel(`${base}.operation`, 'Operation');
-		await this.createState(`${base}.operation.mode`, 'Operation Mode', 'string', 'text', true, true, 'self_consumption');
-		await this.createState(`${base}.operation.backup_reserve_percent`, 'Backup Reserve', 'number', 'level.battery', true, true, 20, '%');
-		await this.createState(`${base}.operation.off_grid_reserve_percent`, 'Off-Grid Reserve', 'number', 'level.battery', true, true, 0, '%');
+		await this.createState(`${base}.operation.mode`, 'Operation Mode', 'string', 'text', true, true, 'self_consumption', undefined, {
+			states: { self_consumption: 'Self-Powered', autonomous: 'Time-Based Control', backup: 'Backup' },
+		});
+		await this.createState(`${base}.operation.backup_reserve_percent`, 'Backup Reserve', 'number', 'level.battery', true, true, 20, '%', { min: 0, max: 100 });
+		await this.createState(`${base}.operation.off_grid_reserve_percent`, 'Off-Grid Reserve', 'number', 'level.battery', true, true, 0, '%', { min: 0, max: 100 });
 
 		// Tariff channel (read-only - rate plan is managed through the utility/Tesla app, not this adapter)
 		await this.createChannel(`${base}.tariff`, 'Tariff');
@@ -334,7 +336,8 @@ export class StateManager {
 		read: boolean,
 		write: boolean,
 		def?: any,
-		unit?: string
+		unit?: string,
+		limits?: Pick<ioBroker.StateCommon, 'min' | 'max' | 'step' | 'states'>
 	): Promise<void> {
 		await this.adapter.setObjectNotExistsAsync(id, {
 			type: 'state',
@@ -346,9 +349,12 @@ export class StateManager {
 				write,
 				def,
 				unit,
+				...limits,
 			},
 			native: {},
 		});
+		// setObjectNotExists never updates an object an earlier version created.
+		if (limits) await this.adapter.extendObjectAsync(id, { common: limits });
 	}
 
 	/**

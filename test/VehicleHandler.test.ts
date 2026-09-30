@@ -174,6 +174,122 @@ test('a successful lock command acks state.locked to true', async () => {
 	assert.equal(states.get(`vehicles.${VIN}.state.locked`), true);
 });
 
+test('a lock command the API answers with result: false restores state.locked, fails with the reason and is not logged as done (regression: was acked as success)', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const vehicle = teslemetry.api.getVehicle(VIN);
+	(vehicle as any).unlockDoors = () => Promise.resolve({ response: { result: false, reason: 'could_not_wake_buses' } });
+
+	const { adapter, states, logs } = createFakeAdapter();
+	const stateManager = new StateManager(adapter);
+	await stateManager.createVehicleStates({ vin: VIN, display_name: 'Test Car' });
+	await adapter.setStateAsync(`vehicles.${VIN}.state.locked`, true, true);
+
+	const handler = new VehicleHandler(adapter, teslemetry, stateManager);
+	handler.registerVehicle(VIN);
+
+	await assert.rejects(() => handler.handleStateChange(VIN, 'commands', 'unlock', true), /could_not_wake_buses/);
+
+	assert.equal(states.get(`vehicles.${VIN}.state.locked`), true);
+	assert.equal(logs.filter((l) => l.message.includes('Unlocked')).length, 0);
+});
+
+test('a command without a reconciled state fails on result: false too', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const vehicle = teslemetry.api.getVehicle(VIN);
+	(vehicle as any).honkHorn = () => Promise.resolve({ response: { result: false } });
+
+	const { adapter, logs } = createFakeAdapter();
+	const handler = new VehicleHandler(adapter, teslemetry, new StateManager(adapter));
+	handler.registerVehicle(VIN);
+
+	await assert.rejects(() => handler.executeCommand(VIN, 'honk_horn'));
+	assert.equal(logs.filter((l) => l.message.includes('Honked')).length, 0);
+});
+
+for (const reason of ['already_set', 'not_charging', 'requested']) {
+	test(`result: false with the benign reason "${reason}" is a success`, async () => {
+		const teslemetry = new Teslemetry('fake-token');
+		const vehicle = teslemetry.api.getVehicle(VIN);
+		const refused = () => Promise.resolve({ response: { result: false, reason } });
+		(vehicle as any).stopCharging = refused;
+		(vehicle as any).setChargeLimit = refused;
+
+		const { adapter, states } = createFakeAdapter();
+		const stateManager = new StateManager(adapter);
+		await stateManager.createVehicleStates({ vin: VIN, display_name: 'Test Car' });
+		await adapter.setStateAsync(`vehicles.${VIN}.charge.charge_limit_soc`, 80, true);
+
+		const handler = new VehicleHandler(adapter, teslemetry, stateManager);
+		handler.registerVehicle(VIN);
+
+		await handler.handleStateChange(VIN, 'commands', 'stop_charging', true);
+		await handler.handleStateChange(VIN, 'charge', 'charge_limit_soc', 90);
+
+		assert.equal(states.get(`vehicles.${VIN}.charge.charge_limit_soc`), 90);
+	});
+}
+
+for (const [command, which, door] of [
+	['open_frunk', 'front', 'TrunkFront'],
+	['open_trunk', 'rear', 'TrunkRear'],
+] as const) {
+	const setup = (doorState: any) => {
+		const teslemetry = new Teslemetry('fake-token');
+		const vehicle = teslemetry.api.getVehicle(VIN);
+		const calls: any[][] = [];
+		(vehicle as any).actuateTrunk = (...args: any[]) => {
+			calls.push(args);
+			return Promise.resolve({ response: { result: true } });
+		};
+		if (doorState !== undefined) teslemetry.sse.cache[VIN] = { data: { DoorState: doorState } };
+
+		const { adapter } = createFakeAdapter();
+		const handler = new VehicleHandler(adapter, teslemetry, new StateManager(adapter));
+		handler.registerVehicle(VIN);
+		return { handler, calls };
+	};
+	const doors = { DriverFront: false, DriverRear: false, PassengerFront: false, PassengerRear: false, TrunkFront: false, TrunkRear: false };
+
+	test(`${command} sends nothing when the stream reports it open (regression: actuate_trunk is a toggle and closed it)`, async () => {
+		const { handler, calls } = setup({ ...doors, [door]: true });
+		await handler.executeCommand(VIN, command);
+		assert.deepEqual(calls, []);
+	});
+
+	test(`${command} is sent when the stream reports it closed`, async () => {
+		const { handler, calls } = setup({ ...doors, TrunkFront: true, TrunkRear: true, [door]: false });
+		await handler.executeCommand(VIN, command);
+		assert.deepEqual(calls, [[which]]);
+	});
+
+	for (const unknown of [undefined, null]) {
+		test(`${command} is still sent while its state is unknown (DoorState ${unknown})`, async () => {
+			const { handler, calls } = setup(unknown);
+			await handler.executeCommand(VIN, command);
+			assert.deepEqual(calls, [[which]]);
+		});
+	}
+}
+
+test('a pressed command button is acknowledged and reset, whether the command works or fails (regression: stayed val true, ack false)', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const vehicle = teslemetry.api.getVehicle(VIN);
+	(vehicle as any).flashLights = () => Promise.resolve({ response: { result: true } });
+	(vehicle as any).honkHorn = () => Promise.reject(new Error('vehicle unreachable'));
+
+	const { adapter, states } = createFakeAdapter();
+	const handler = new VehicleHandler(adapter, teslemetry, new StateManager(adapter));
+	handler.registerVehicle(VIN);
+
+	await adapter.setStateAsync(`vehicles.${VIN}.commands.flash_lights`, true);
+	await handler.handleStateChange(VIN, 'commands', 'flash_lights', true);
+	assert.equal(states.get(`vehicles.${VIN}.commands.flash_lights`), false);
+
+	await adapter.setStateAsync(`vehicles.${VIN}.commands.honk_horn`, true);
+	await assert.rejects(() => handler.handleStateChange(VIN, 'commands', 'honk_horn', true), /vehicle unreachable/);
+	assert.equal(states.get(`vehicles.${VIN}.commands.honk_horn`), false);
+});
+
 test('a rejected temperature write restores driver_temp_setting to its prior value and propagates once, unlogged, to the caller', async () => {
 	const teslemetry = new Teslemetry('fake-token');
 	const vehicle = teslemetry.api.getVehicle(VIN);
