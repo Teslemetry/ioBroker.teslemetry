@@ -4,6 +4,8 @@ import { StateManager } from '../lib/StateManager.js';
 import { VehicleHandler } from '../lib/VehicleHandler.js';
 import { EnergyHandler } from '../lib/EnergyHandler.js';
 import { StreamHandler } from '../lib/StreamHandler.js';
+import { testConnection } from '../lib/ConnectionTest.js';
+import { filterDevices } from '../lib/DeviceFilter.js';
 
 // Matches the "native" config schema in io-package.json / admin/jsonConfig.json.
 declare global {
@@ -14,7 +16,7 @@ declare global {
 			pollInterval: number;
 			enableStreaming: boolean;
 			selectedVehicles: string[];
-			selectedEnergySites: number[];
+			selectedEnergySites: string[];
 		}
 	}
 }
@@ -69,15 +71,16 @@ class TeslemetryAdapter extends utils.Adapter {
 			const { vehicles, energySites } = products;
 
 			// Create state objects for vehicles
-			const selectedVehicles = this.config.selectedVehicles || [];
 			const vehicleEntries = Object.entries(vehicles);
+			const selectedVehicles = filterDevices(Object.keys(vehicles), this.config.selectedVehicles);
 
 			if (vehicleEntries.length === 0) {
 				this.log.warn('No vehicles found in your Tesla account');
 			} else {
+				this.warnUnmatched('vehicles', selectedVehicles);
 				for (const [vin, vehicle] of vehicleEntries) {
 					// If no selection made, include all vehicles
-					if (selectedVehicles.length === 0 || selectedVehicles.includes(vin)) {
+					if (selectedVehicles.selected.includes(vin)) {
 						this.log.info(`Setting up vehicle: ${vehicle.name} (${vin})`);
 						await this.stateManager.createVehicleStates({
 							vin,
@@ -90,16 +93,17 @@ class TeslemetryAdapter extends utils.Adapter {
 			}
 
 			// Create state objects for energy sites
-			const selectedSites = this.config.selectedEnergySites || [];
 			const siteEntries = Object.entries(energySites);
+			const selectedSites = filterDevices(Object.keys(energySites), this.config.selectedEnergySites);
 
 			if (siteEntries.length === 0) {
 				this.log.info('No energy sites found in your Tesla account');
 			} else {
+				this.warnUnmatched('energy sites', selectedSites);
 				for (const [id, site] of siteEntries) {
 					const siteId = Number(id);
 					// If no selection made, include all sites
-					if (selectedSites.length === 0 || selectedSites.includes(siteId)) {
+					if (selectedSites.selected.includes(id)) {
 						this.log.info(`Setting up energy site: ${site.name} (${siteId})`);
 						await this.stateManager.createEnergySiteStates({
 							id: siteId,
@@ -205,48 +209,23 @@ class TeslemetryAdapter extends utils.Adapter {
 	private async onMessage(obj: ioBroker.Message): Promise<void> {
 		if (typeof obj === 'object' && obj.message) {
 			if (obj.command === 'testConnection') {
-				try {
-					const token = obj.message.accessToken;
-					if (!token) {
-						this.sendTo(obj.from, obj.command, { error: 'No access token provided' }, obj.callback);
-						return;
-					}
-
-					// Test connection by creating a Teslemetry client and fetching products
-					const testClient = new Teslemetry(token);
-					const products = await testClient.createProducts();
-
-					const vehicleCount = Object.keys(products.vehicles).length;
-					const siteCount = Object.keys(products.energySites).length;
-
-					this.sendTo(
-						obj.from,
-						obj.command,
-						{
-							success: true,
-							message: `Connected successfully! Found ${vehicleCount} vehicle(s) and ${siteCount} energy site(s).`,
-							vehicles: Object.entries(products.vehicles).map(([vin, v]) => ({
-								vin,
-								name: v.name,
-							})),
-							energySites: Object.entries(products.energySites).map(([id, s]) => ({
-								id: Number(id),
-								name: s.name,
-							})),
-						},
-						obj.callback
-					);
-				} catch (error: any) {
-					this.sendTo(
-						obj.from,
-						obj.command,
-						{
-							error: `Connection failed: ${error.message}`,
-						},
-						obj.callback
-					);
-				}
+				const reply = await testConnection(obj.message, (accessToken) =>
+					new Teslemetry(accessToken).createProducts()
+				);
+				this.sendTo(obj.from, obj.command, reply, obj.callback);
 			}
+		}
+	}
+
+	/**
+	 * Warn about device selection entries that match nothing on the account
+	 */
+	private warnUnmatched(kind: string, filter: ReturnType<typeof filterDevices>): void {
+		if (filter.unmatched.length > 0) {
+			this.log.warn(
+				`Device selection: no ${kind} in your Tesla account match ${filter.unmatched.join(', ')}` +
+					(filter.selected.length === 0 ? `, so no ${kind} are set up` : '')
+			);
 		}
 	}
 

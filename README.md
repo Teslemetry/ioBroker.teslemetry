@@ -63,7 +63,7 @@ Before installing this adapter, you need:
 1. Open the adapter configuration in ioBroker admin
 2. Paste your Teslemetry access token in the **Access Token** field
 3. Click **Test Connection** to verify it works
-4. The test will show how many vehicles and energy sites were found
+4. The test will show the vehicles and energy sites that were found, with the VINs and site IDs that **Device Selection** takes
 
 ### Region Selection
 

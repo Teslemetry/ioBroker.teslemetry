@@ -22,14 +22,6 @@
       "command": "testConnection",
       "jsonData": "{\"accessToken\": \"${data.accessToken}\"}",
       "label": "Test Connection",
-      "result": {
-        "success": {
-          "text": "${data.message}"
-        },
-        "error": {
-          "text": "${data.error}"
-        }
-      },
       "xs": 12,
       "sm": 12,
       "md": 6,
