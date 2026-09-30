@@ -1,5 +1,6 @@
 import { Teslemetry, TeslemetryVehicleApi } from '@teslemetry/api';
 import { StateManager } from './StateManager.js';
+import { describeError } from './errors.js';
 
 export class VehicleHandler {
 	private vehicles: Map<string, TeslemetryVehicleApi> = new Map();
@@ -160,13 +161,13 @@ export class VehicleHandler {
 	}
 
 	/**
-	 * Fetch vehicle data and update states
+	 * Fetch vehicle data and update states. Resolves to whether the API answered.
 	 */
-	async fetchVehicleData(vin: string, allowWake = false): Promise<void> {
+	async fetchVehicleData(vin: string, allowWake = false): Promise<boolean> {
 		const vehicle = this.vehicles.get(vin);
 		if (!vehicle) {
 			this.adapter.log.error(`Vehicle ${vin} not registered`);
-			return;
+			return false;
 		}
 
 		try {
@@ -178,26 +179,28 @@ export class VehicleHandler {
 			// Only fetch data if vehicle is online or we're allowed to wake it
 			if (state === 'asleep' && !allowWake) {
 				this.adapter.log.debug(`Vehicle ${vin} is asleep, skipping data fetch`);
-				return;
+				return true;
 			}
 
 			// Fetch vehicle data
 			const data = await vehicle.vehicleData();
 			await this.stateManager.updateVehicleData(vin, data);
 			this.adapter.log.debug(`Updated data for vehicle ${vin}`);
-		} catch (error: any) {
-			this.adapter.log.error(`Error fetching data for vehicle ${vin}: ${error.message}`);
+			return true;
+		} catch (error) {
+			this.adapter.log.error(`Error fetching data for vehicle ${vin}: ${describeError(error)}`);
+			return false;
 		}
 	}
 
 	/**
-	 * Fetch data for all registered vehicles
+	 * Fetch data for all registered vehicles. Resolves to each fetch's outcome.
 	 */
-	async fetchAllVehicleData(allowWake = false): Promise<void> {
+	async fetchAllVehicleData(allowWake = false): Promise<boolean[]> {
 		const promises = Array.from(this.vehicles.keys()).map((vin) =>
 			this.fetchVehicleData(vin, allowWake)
 		);
-		await Promise.allSettled(promises);
+		return Promise.all(promises);
 	}
 
 	/**
