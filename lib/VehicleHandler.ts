@@ -1,5 +1,6 @@
 import { Teslemetry, TeslemetryVehicleApi } from '@teslemetry/api';
 import { StateManager } from './StateManager.js';
+import { describeError } from './errors.js';
 
 // Reasons Tesla gives with `result: false` when the vehicle is already in the
 // requested state or has accepted the request; they are not failures.
@@ -23,6 +24,16 @@ export class VehicleHandler {
 		private teslemetry: Teslemetry,
 		private stateManager: StateManager
 	) {}
+
+	// Set by stop(); a fetch still awaiting the API then writes nothing.
+	private stopped = false;
+
+	/**
+	 * Stops pending fetches from writing states once the adapter unloads
+	 */
+	stop(): void {
+		this.stopped = true;
+	}
 
 	/**
 	 * Register a vehicle for handling
@@ -192,44 +203,48 @@ export class VehicleHandler {
 	}
 
 	/**
-	 * Fetch vehicle data and update states
+	 * Fetch vehicle data and update states. Resolves to whether the API answered.
 	 */
-	async fetchVehicleData(vin: string, allowWake = false): Promise<void> {
+	async fetchVehicleData(vin: string, allowWake = false): Promise<boolean> {
 		const vehicle = this.vehicles.get(vin);
 		if (!vehicle) {
 			this.adapter.log.error(`Vehicle ${vin} not registered`);
-			return;
+			return false;
 		}
 
 		try {
 			// Get vehicle state first (doesn't wake vehicle)
 			const stateResult = await vehicle.state();
+			if (this.stopped) return false;
 			const state = stateResult?.response?.state ?? 'unknown';
 			await this.adapter.setStateAsync(`vehicles.${vin}._info.state`, state, true);
 
 			// Only fetch data if vehicle is online or we're allowed to wake it
 			if (state === 'asleep' && !allowWake) {
 				this.adapter.log.debug(`Vehicle ${vin} is asleep, skipping data fetch`);
-				return;
+				return true;
 			}
 
 			// Fetch vehicle data
 			const data = await vehicle.vehicleData();
+			if (this.stopped) return false;
 			await this.stateManager.updateVehicleData(vin, data);
 			this.adapter.log.debug(`Updated data for vehicle ${vin}`);
-		} catch (error: any) {
-			this.adapter.log.error(`Error fetching data for vehicle ${vin}: ${error.message}`);
+			return true;
+		} catch (error) {
+			this.adapter.log.error(`Error fetching data for vehicle ${vin}: ${describeError(error)}`);
+			return false;
 		}
 	}
 
 	/**
-	 * Fetch data for all registered vehicles
+	 * Fetch data for all registered vehicles. Resolves to each fetch's outcome.
 	 */
-	async fetchAllVehicleData(allowWake = false): Promise<void> {
+	async fetchAllVehicleData(allowWake = false): Promise<boolean[]> {
 		const promises = Array.from(this.vehicles.keys()).map((vin) =>
 			this.fetchVehicleData(vin, allowWake)
 		);
-		await Promise.allSettled(promises);
+		return Promise.all(promises);
 	}
 
 	/**

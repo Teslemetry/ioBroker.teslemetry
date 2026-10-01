@@ -6,6 +6,12 @@ import { EnergyHandler } from '../lib/EnergyHandler.js';
 import { StreamHandler } from '../lib/StreamHandler.js';
 import { testConnection } from '../lib/ConnectionTest.js';
 import { filterDevices } from '../lib/DeviceFilter.js';
+import { connectedAfter } from '../lib/connection.js';
+import { describeError, withHttpErrors } from '../lib/errors.js';
+
+// Start-up is retried after 10s, doubling up to 10 minutes.
+const START_RETRY_BASE_MS = 10_000;
+const START_RETRY_MAX_MS = 600_000;
 
 // Matches the "native" config schema in io-package.json / admin/jsonConfig.json.
 declare global {
@@ -28,6 +34,10 @@ class TeslemetryAdapter extends utils.Adapter {
 	private energyHandler?: EnergyHandler;
 	private streamHandler?: StreamHandler;
 	private pollInterval?: ioBroker.Interval;
+	private startRetry?: ioBroker.Timeout;
+	private startAttempts = 0;
+	// Set on unload: the database is closed from then on, so nothing may touch states or objects.
+	private unloaded = false;
 
 	public constructor(options: Partial<utils.AdapterOptions> = {}) {
 		super({
@@ -56,9 +66,11 @@ class TeslemetryAdapter extends utils.Adapter {
 		try {
 			// Initialize Teslemetry client
 			this.log.info('Initializing Teslemetry client...');
-			this.teslemetry = new Teslemetry(this.config.accessToken, {
-				region: this.config.region === 'auto' ? undefined : this.config.region,
-			});
+			this.teslemetry = withHttpErrors(
+				new Teslemetry(this.config.accessToken, {
+					region: this.config.region === 'auto' ? undefined : this.config.region,
+				})
+			);
 
 			// Initialize handlers
 			this.stateManager = new StateManager(this);
@@ -68,6 +80,7 @@ class TeslemetryAdapter extends utils.Adapter {
 			// Fetch products
 			this.log.info('Fetching Tesla products...');
 			const products = await this.teslemetry.createProducts();
+			if (this.unloaded) return;
 			const { vehicles, energySites } = products;
 
 			// Create state objects for vehicles
@@ -87,6 +100,7 @@ class TeslemetryAdapter extends utils.Adapter {
 							display_name: vehicle.name,
 							rhd: vehicle.metadata.config?.rhd ?? undefined,
 						});
+						if (this.unloaded) return;
 						this.vehicleHandler.registerVehicle(vin);
 					}
 				}
@@ -109,6 +123,7 @@ class TeslemetryAdapter extends utils.Adapter {
 							id: siteId,
 							site_name: site.name,
 						});
+						if (this.unloaded) return;
 						this.energyHandler.registerSite(siteId);
 					}
 				}
@@ -121,13 +136,15 @@ class TeslemetryAdapter extends utils.Adapter {
 			// background loop and returns immediately, so a stream event could otherwise land
 			// before this REST fetch resolves and get overwritten by the stale snapshot.
 			this.log.info('Fetching initial energy site data...');
-			await this.energyHandler.fetchAllSiteData();
+			const siteResults = await this.energyHandler.fetchAllSiteData();
+			if (this.unloaded) return;
 
 			// Set up streaming or polling
 			if (this.config.enableStreaming !== false) {
 				this.log.info('Starting SSE streaming...');
 				this.streamHandler = new StreamHandler(this, this.teslemetry, this.stateManager, this.energyHandler);
 				await this.streamHandler.connect();
+				if (this.unloaded) return;
 			} else {
 				this.log.info('SSE streaming disabled, using polling');
 				this.startPolling();
@@ -135,13 +152,52 @@ class TeslemetryAdapter extends utils.Adapter {
 
 			// Do initial vehicle data fetch
 			this.log.info('Fetching initial vehicle data...');
-			await this.vehicleHandler.fetchAllVehicleData(false);
+			const results = [...siteResults, ...(await this.vehicleHandler.fetchAllVehicleData(false))];
+			if (this.unloaded) return;
 
+			this.startAttempts = 0;
 			this.log.info('Teslemetry adapter started successfully');
-			await this.setStateAsync('info.connection', true, true);
-		} catch (error: any) {
-			this.log.error(`Failed to start adapter: ${error.message}`);
-			await this.setStateAsync('info.connection', false, true);
+			// While streaming, info.connection follows the stream (see StreamHandler).
+			if (!this.streamHandler) {
+				// Connected unless every initial request failed, as for each polling round.
+				await this.setStateAsync('info.connection', connectedAfter(results), true);
+			}
+		} catch (error) {
+			// A stop during start-up closes the database under the awaits above;
+			// there is nothing to report or retry then.
+			if (this.unloaded) return;
+
+			this.stopDataSources();
+			const delay = Math.min(START_RETRY_BASE_MS * 2 ** this.startAttempts++, START_RETRY_MAX_MS);
+			this.log.error(`Failed to start adapter: ${describeError(error)}. Retrying in ${delay / 1000}s.`);
+			this.startRetry = this.setTimeout(() => {
+				this.startRetry = undefined;
+				void this.onReady();
+			}, delay);
+			try {
+				await this.setStateAsync('info.connection', false, true);
+			} catch {
+				// The database can close between the check above and this write.
+			}
+		}
+	}
+
+	/**
+	 * Stop polling and streaming
+	 */
+	private stopDataSources(): void {
+		if (this.pollInterval) {
+			this.clearInterval(this.pollInterval);
+			this.pollInterval = undefined;
+		}
+
+		// StreamHandler.disconnect() also closes the underlying SSE connection -
+		// no separate teslemetry.sse.disconnect() needed
+		if (this.streamHandler) {
+			this.streamHandler.disconnect();
+			this.streamHandler = undefined;
+		} else if (this.teslemetry) {
+			this.teslemetry.sse.disconnect();
 		}
 	}
 
@@ -150,21 +206,16 @@ class TeslemetryAdapter extends utils.Adapter {
 	 */
 	private onUnload(callback: () => void): void {
 		try {
+			this.unloaded = true;
 			this.log.info('Cleaning up...');
 
-			// Stop polling
-			if (this.pollInterval) {
-				this.clearInterval(this.pollInterval);
-				this.pollInterval = undefined;
+			if (this.startRetry) {
+				this.clearTimeout(this.startRetry);
+				this.startRetry = undefined;
 			}
-
-			// Disconnect streaming (StreamHandler.disconnect() also closes the
-			// underlying SSE connection - no separate teslemetry.sse.disconnect() needed)
-			if (this.streamHandler) {
-				this.streamHandler.disconnect();
-			} else if (this.teslemetry) {
-				this.teslemetry.sse.disconnect();
-			}
+			this.stopDataSources();
+			this.vehicleHandler?.stop();
+			this.energyHandler?.stop();
 
 			callback();
 		} catch {
@@ -198,8 +249,8 @@ class TeslemetryAdapter extends utils.Adapter {
 			} else if (type === 'energy') {
 				await this.energyHandler?.handleStateChange(Number(identifier), category, stateName, state.val);
 			}
-		} catch (error: any) {
-			this.log.error(`Error handling state change: ${error.message}`);
+		} catch (error) {
+			this.log.error(`Error handling state change: ${describeError(error)}`);
 		}
 	}
 
@@ -210,7 +261,7 @@ class TeslemetryAdapter extends utils.Adapter {
 		if (typeof obj === 'object' && obj.message) {
 			if (obj.command === 'testConnection') {
 				const reply = await testConnection(obj.message, (accessToken) =>
-					new Teslemetry(accessToken).createProducts()
+					withHttpErrors(new Teslemetry(accessToken)).createProducts()
 				);
 				this.sendTo(obj.from, obj.command, reply, obj.callback);
 			}
@@ -238,10 +289,15 @@ class TeslemetryAdapter extends utils.Adapter {
 
 		this.pollInterval = this.setInterval(async () => {
 			try {
-				await this.vehicleHandler?.fetchAllVehicleData(false);
-				await this.energyHandler?.fetchAllSiteData();
-			} catch (error: any) {
-				this.log.error(`Error during polling: ${error.message}`);
+				const results = [
+					...((await this.vehicleHandler?.fetchAllVehicleData(false)) ?? []),
+					...((await this.energyHandler?.fetchAllSiteData()) ?? []),
+				];
+				if (this.unloaded) return;
+				// Connected unless every request of this round failed.
+				await this.setStateAsync('info.connection', connectedAfter(results), true);
+			} catch (error) {
+				this.log.error(`Error during polling: ${describeError(error)}`);
 			}
 		}, interval);
 	}

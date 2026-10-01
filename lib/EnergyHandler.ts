@@ -1,5 +1,6 @@
 import { Teslemetry, TeslemetryEnergyApi } from '@teslemetry/api';
 import { StateManager } from './StateManager.js';
+import { describeError } from './errors.js';
 
 export class EnergyHandler {
 	private sites: Map<number, TeslemetryEnergyApi> = new Map();
@@ -9,6 +10,16 @@ export class EnergyHandler {
 		private teslemetry: Teslemetry,
 		private stateManager: StateManager
 	) {}
+
+	// Set by stop(); a fetch still awaiting the API then writes nothing.
+	private stopped = false;
+
+	/**
+	 * Stops pending fetches from writing states once the adapter unloads
+	 */
+	stop(): void {
+		this.stopped = true;
+	}
 
 	/**
 	 * Register an energy site for handling
@@ -97,36 +108,39 @@ export class EnergyHandler {
 	}
 
 	/**
-	 * Fetch energy site data and update states
+	 * Fetch energy site data and update states. Resolves to whether the API answered.
 	 */
-	async fetchSiteData(siteId: number): Promise<void> {
+	async fetchSiteData(siteId: number): Promise<boolean> {
 		const site = this.sites.get(siteId);
 		if (!site) {
 			this.adapter.log.error(`Energy site ${siteId} not registered`);
-			return;
+			return false;
 		}
 
 		try {
 			// Fetch site status (power/battery/grid) and site info (operation settings)
 			const [liveStatus, siteInfo] = await Promise.all([site.getLiveStatus(), site.getSiteInfo()]);
+			if (this.stopped) return false;
 			await this.stateManager.updateEnergySiteData(siteId, {
 				...siteInfo?.response,
 				...liveStatus?.response,
 			});
 			this.adapter.log.debug(`Updated data for energy site ${siteId}`);
-		} catch (error: any) {
-			this.adapter.log.error(`Error fetching data for site ${siteId}: ${error.message}`);
+			return true;
+		} catch (error) {
+			this.adapter.log.error(`Error fetching data for site ${siteId}: ${describeError(error)}`);
+			return false;
 		}
 	}
 
 	/**
-	 * Fetch data for all registered energy sites
+	 * Fetch data for all registered energy sites. Resolves to each fetch's outcome.
 	 */
-	async fetchAllSiteData(): Promise<void> {
+	async fetchAllSiteData(): Promise<boolean[]> {
 		const promises = Array.from(this.sites.keys()).map((siteId) =>
 			this.fetchSiteData(siteId)
 		);
-		await Promise.allSettled(promises);
+		return Promise.all(promises);
 	}
 
 	/**
