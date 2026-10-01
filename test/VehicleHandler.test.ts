@@ -360,3 +360,21 @@ test('fetchAllVehicleData reports success for an asleep vehicle (the API answere
 
 	assert.deepEqual(await handler.fetchAllVehicleData(false), [true]);
 });
+
+test('a fetch pending when the adapter stops writes no states (regression: wrote after unload)', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const vehicle = teslemetry.api.getVehicle(VIN);
+	let answer!: (value: unknown) => void;
+	(vehicle as any).state = () => new Promise((resolve) => (answer = resolve));
+
+	const { adapter, states } = createFakeAdapter();
+	const handler = new VehicleHandler(adapter, teslemetry, new StateManager(adapter));
+	handler.registerVehicle(VIN);
+
+	const fetch = handler.fetchVehicleData(VIN, false);
+	handler.stop();
+	answer({ response: { state: 'online' } });
+
+	assert.equal(await fetch, false);
+	assert.equal(states.size, 0);
+});

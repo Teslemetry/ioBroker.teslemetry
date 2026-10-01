@@ -6,6 +6,7 @@ import { EnergyHandler } from '../lib/EnergyHandler.js';
 import { StreamHandler } from '../lib/StreamHandler.js';
 import { testConnection } from '../lib/ConnectionTest.js';
 import { filterDevices } from '../lib/DeviceFilter.js';
+import { connectedAfter } from '../lib/connection.js';
 import { describeError, withHttpErrors } from '../lib/errors.js';
 
 // Start-up is retried after 10s, doubling up to 10 minutes.
@@ -135,7 +136,7 @@ class TeslemetryAdapter extends utils.Adapter {
 			// background loop and returns immediately, so a stream event could otherwise land
 			// before this REST fetch resolves and get overwritten by the stale snapshot.
 			this.log.info('Fetching initial energy site data...');
-			await this.energyHandler.fetchAllSiteData();
+			const siteResults = await this.energyHandler.fetchAllSiteData();
 			if (this.unloaded) return;
 
 			// Set up streaming or polling
@@ -151,14 +152,15 @@ class TeslemetryAdapter extends utils.Adapter {
 
 			// Do initial vehicle data fetch
 			this.log.info('Fetching initial vehicle data...');
-			await this.vehicleHandler.fetchAllVehicleData(false);
+			const results = [...siteResults, ...(await this.vehicleHandler.fetchAllVehicleData(false))];
 			if (this.unloaded) return;
 
 			this.startAttempts = 0;
 			this.log.info('Teslemetry adapter started successfully');
 			// While streaming, info.connection follows the stream (see StreamHandler).
 			if (!this.streamHandler) {
-				await this.setStateAsync('info.connection', true, true);
+				// Connected unless every initial request failed, as for each polling round.
+				await this.setStateAsync('info.connection', connectedAfter(results), true);
 			}
 		} catch (error) {
 			// A stop during start-up closes the database under the awaits above;
@@ -212,6 +214,8 @@ class TeslemetryAdapter extends utils.Adapter {
 				this.startRetry = undefined;
 			}
 			this.stopDataSources();
+			this.vehicleHandler?.stop();
+			this.energyHandler?.stop();
 
 			callback();
 		} catch {
@@ -291,7 +295,7 @@ class TeslemetryAdapter extends utils.Adapter {
 				];
 				if (this.unloaded) return;
 				// Connected unless every request of this round failed.
-				await this.setStateAsync('info.connection', results.length === 0 || results.includes(true), true);
+				await this.setStateAsync('info.connection', connectedAfter(results), true);
 			} catch (error) {
 				this.log.error(`Error during polling: ${describeError(error)}`);
 			}

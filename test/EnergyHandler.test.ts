@@ -147,3 +147,22 @@ test('fetchSiteData logs the API\'s error_description and reports failure (regre
 		[`Error fetching data for site ${SITE_ID}: Subscription required`]
 	);
 });
+
+test('a site fetch pending when the adapter stops writes no states (regression: wrote after unload)', async () => {
+	const teslemetry = new Teslemetry('fake-token');
+	const site = teslemetry.api.getEnergySite(SITE_ID);
+	let answer!: (value: unknown) => void;
+	(site as any).getLiveStatus = () => new Promise((resolve) => (answer = resolve));
+	(site as any).getSiteInfo = () => Promise.resolve({ response: {} });
+
+	const { adapter, states } = createFakeAdapter();
+	const handler = new EnergyHandler(adapter, teslemetry, new StateManager(adapter));
+	handler.registerSite(SITE_ID);
+
+	const fetch = handler.fetchSiteData(SITE_ID);
+	handler.stop();
+	answer({ response: { solar_power: 500 } });
+
+	assert.equal(await fetch, false);
+	assert.equal(states.size, 0);
+});

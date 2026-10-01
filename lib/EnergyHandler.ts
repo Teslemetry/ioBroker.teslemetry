@@ -11,6 +11,16 @@ export class EnergyHandler {
 		private stateManager: StateManager
 	) {}
 
+	// Set by stop(); a fetch still awaiting the API then writes nothing.
+	private stopped = false;
+
+	/**
+	 * Stops pending fetches from writing states once the adapter unloads
+	 */
+	stop(): void {
+		this.stopped = true;
+	}
+
 	/**
 	 * Register an energy site for handling
 	 */
@@ -110,6 +120,7 @@ export class EnergyHandler {
 		try {
 			// Fetch site status (power/battery/grid) and site info (operation settings)
 			const [liveStatus, siteInfo] = await Promise.all([site.getLiveStatus(), site.getSiteInfo()]);
+			if (this.stopped) return false;
 			await this.stateManager.updateEnergySiteData(siteId, {
 				...siteInfo?.response,
 				...liveStatus?.response,

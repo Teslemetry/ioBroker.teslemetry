@@ -25,6 +25,16 @@ export class VehicleHandler {
 		private stateManager: StateManager
 	) {}
 
+	// Set by stop(); a fetch still awaiting the API then writes nothing.
+	private stopped = false;
+
+	/**
+	 * Stops pending fetches from writing states once the adapter unloads
+	 */
+	stop(): void {
+		this.stopped = true;
+	}
+
 	/**
 	 * Register a vehicle for handling
 	 */
@@ -205,6 +215,7 @@ export class VehicleHandler {
 		try {
 			// Get vehicle state first (doesn't wake vehicle)
 			const stateResult = await vehicle.state();
+			if (this.stopped) return false;
 			const state = stateResult?.response?.state ?? 'unknown';
 			await this.adapter.setStateAsync(`vehicles.${vin}._info.state`, state, true);
 
@@ -216,6 +227,7 @@ export class VehicleHandler {
 
 			// Fetch vehicle data
 			const data = await vehicle.vehicleData();
+			if (this.stopped) return false;
 			await this.stateManager.updateVehicleData(vin, data);
 			this.adapter.log.debug(`Updated data for vehicle ${vin}`);
 			return true;
