@@ -337,6 +337,11 @@ npm test
 
 ## Changelog
 
+### **WORK IN PROGRESS**
+- (breaking) `drive.odometer`, `location.speed` and `charge.charge_rate` now hold km and km/h, as their units say. Earlier versions wrote the raw mile values. Odometer, speed and charge-rate history and any scripts or thresholds that use these states change by a factor of 1.609.
+- `charge.charging_state` and `drive.shift_state` now hold Tesla's short values (`Charging`, `D`) from both polling and streaming. Streaming wrote the long names (`DetailedChargeStateCharging`, `ShiftStateD`). Both states now list their values.
+- `charge.charge_rate` has role `value` instead of `value.power`.
+
 ### 0.2.5
 - Dependency updates
 

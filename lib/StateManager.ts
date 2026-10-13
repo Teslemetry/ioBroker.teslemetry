@@ -12,6 +12,41 @@ export interface EnergySiteMetadata {
 	resource_type?: string;
 }
 
+const KM_PER_MILE = 1.609344;
+
+// Tesla reports odometer, speed and charge rate in miles; the states hold km and km/h.
+function milesToKm(miles: number | null): number | null {
+	if (typeof miles !== 'number') return miles;
+	return Math.round(miles * KM_PER_MILE * 100) / 100;
+}
+
+// REST vehicle_data uses Tesla's short values ("Charging", "D"); the stream prefixes
+// them with the enum name ("DetailedChargeStateCharging", "ShiftStateD").
+function stripEnumPrefix(value: unknown, prefix: string): unknown {
+	return typeof value === 'string' && value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+const CHARGING_STATES: Record<string, string> = {
+	Disconnected: 'Disconnected',
+	NoPower: 'No Power',
+	Starting: 'Starting',
+	Charging: 'Charging',
+	Complete: 'Complete',
+	Stopped: 'Stopped',
+	Calibrating: 'Calibrating',
+	Unknown: 'Unknown',
+};
+
+const SHIFT_STATES: Record<string, string> = {
+	P: 'Park',
+	R: 'Reverse',
+	N: 'Neutral',
+	D: 'Drive',
+	Invalid: 'Invalid',
+	SNA: 'Not Available',
+	Unknown: 'Unknown',
+};
+
 export class StateManager {
 	// Right-hand-drive vehicles have their driver seat on the physical right, so the
 	// HvacLeft/HvacRightTemperatureRequest signals map to the opposite driver/passenger side.
@@ -62,16 +97,20 @@ export class StateManager {
 		await this.createChannel(`${base}.charge`, 'Charging');
 		await this.createState(`${base}.charge.battery_level`, 'Battery Level', 'number', 'value.battery', true, false, 0, '%');
 		await this.createState(`${base}.charge.usable_battery_level`, 'Usable Battery Level', 'number', 'value.battery', true, false, 0, '%');
-		await this.createState(`${base}.charge.charging_state`, 'Charging State', 'string', 'text', true, false, 'Disconnected');
+		await this.createState(`${base}.charge.charging_state`, 'Charging State', 'string', 'text', true, false, 'Disconnected', undefined, {
+			states: CHARGING_STATES,
+		});
 		await this.createState(`${base}.charge.charge_limit_soc`, 'Charge Limit', 'number', 'level.battery', true, true, 80, '%', { min: 50, max: 100, step: 1 });
-		await this.createState(`${base}.charge.charge_rate`, 'Charge Rate', 'number', 'value.power', true, false, 0, 'km/h');
+		await this.createState(`${base}.charge.charge_rate`, 'Charge Rate', 'number', 'value', true, false, 0, 'km/h');
+		// Range added per hour, not power; earlier versions created it as value.power.
+		await this.adapter.extendObjectAsync(`${base}.charge.charge_rate`, { common: { role: 'value' } });
 		await this.createState(`${base}.charge.charger_power`, 'Charger Power', 'number', 'value.power', true, false, 0, 'kW');
 		await this.createState(`${base}.charge.time_to_full_charge`, 'Time to Full Charge', 'number', 'value.interval', true, false, 0, 'h');
 
 		// Drive channel
 		await this.createChannel(`${base}.drive`, 'Drive');
 		await this.createState(`${base}.drive.odometer`, 'Odometer', 'number', 'value.distance', true, false, 0, 'km');
-		await this.createState(`${base}.drive.shift_state`, 'Shift State', 'string', 'text', true, false, 'P');
+		await this.createState(`${base}.drive.shift_state`, 'Shift State', 'string', 'text', true, false, 'P', undefined, { states: SHIFT_STATES });
 
 		// State channel
 		await this.createChannel(`${base}.state`, 'Vehicle State');
@@ -176,7 +215,7 @@ export class StateManager {
 				if (ds.latitude !== undefined) await this.setStateAsync(`${base}.location.latitude`, ds.latitude);
 				if (ds.longitude !== undefined) await this.setStateAsync(`${base}.location.longitude`, ds.longitude);
 				if (ds.heading !== undefined) await this.setStateAsync(`${base}.location.heading`, ds.heading);
-				if (ds.speed !== undefined) await this.setStateAsync(`${base}.location.speed`, ds.speed || 0);
+				if (ds.speed !== undefined) await this.setStateAsync(`${base}.location.speed`, milesToKm(ds.speed || 0));
 				if (ds.shift_state !== undefined) await this.setStateAsync(`${base}.drive.shift_state`, ds.shift_state || 'P');
 			}
 
@@ -198,7 +237,7 @@ export class StateManager {
 				if (chs.usable_battery_level !== undefined) await this.setStateAsync(`${base}.charge.usable_battery_level`, chs.usable_battery_level);
 				if (chs.charging_state !== undefined) await this.setStateAsync(`${base}.charge.charging_state`, chs.charging_state);
 				if (chs.charge_limit_soc !== undefined) await this.setStateAsync(`${base}.charge.charge_limit_soc`, chs.charge_limit_soc);
-				if (chs.charge_rate !== undefined) await this.setStateAsync(`${base}.charge.charge_rate`, chs.charge_rate);
+				if (chs.charge_rate !== undefined) await this.setStateAsync(`${base}.charge.charge_rate`, milesToKm(chs.charge_rate));
 				if (chs.charger_power !== undefined) await this.setStateAsync(`${base}.charge.charger_power`, chs.charger_power);
 				if (chs.time_to_full_charge !== undefined) await this.setStateAsync(`${base}.charge.time_to_full_charge`, chs.time_to_full_charge);
 			}
@@ -210,7 +249,7 @@ export class StateManager {
 				if (vs.sentry_mode !== undefined) await this.setStateAsync(`${base}.state.sentry_mode`, vs.sentry_mode);
 				if (vs.valet_mode !== undefined) await this.setStateAsync(`${base}.state.valet_mode`, vs.valet_mode);
 				if (vs.is_user_present !== undefined) await this.setStateAsync(`${base}.state.is_user_present`, vs.is_user_present);
-				if (vs.odometer !== undefined) await this.setStateAsync(`${base}.drive.odometer`, vs.odometer);
+				if (vs.odometer !== undefined) await this.setStateAsync(`${base}.drive.odometer`, milesToKm(vs.odometer));
 			}
 		} catch (error) {
 			this.adapter.log.error(`Error updating vehicle data for ${vin}: ${error}`);
@@ -230,9 +269,9 @@ export class StateManager {
 			if (signals.Location?.latitude !== undefined) await this.setStateAsync(`${base}.location.latitude`, signals.Location.latitude);
 			if (signals.Location?.longitude !== undefined) await this.setStateAsync(`${base}.location.longitude`, signals.Location.longitude);
 			if (signals.GpsHeading !== undefined) await this.setStateAsync(`${base}.location.heading`, signals.GpsHeading);
-			if (signals.VehicleSpeed !== undefined) await this.setStateAsync(`${base}.location.speed`, signals.VehicleSpeed || 0);
-			if (signals.Gear !== undefined) await this.setStateAsync(`${base}.drive.shift_state`, signals.Gear);
-			if (signals.Odometer !== undefined) await this.setStateAsync(`${base}.drive.odometer`, signals.Odometer);
+			if (signals.VehicleSpeed !== undefined) await this.setStateAsync(`${base}.location.speed`, milesToKm(signals.VehicleSpeed || 0));
+			if (signals.Gear !== undefined) await this.setStateAsync(`${base}.drive.shift_state`, stripEnumPrefix(signals.Gear, 'ShiftState'));
+			if (signals.Odometer !== undefined) await this.setStateAsync(`${base}.drive.odometer`, milesToKm(signals.Odometer));
 
 			if (signals.InsideTemp !== undefined) await this.setStateAsync(`${base}.climate.inside_temp`, signals.InsideTemp);
 			if (signals.OutsideTemp !== undefined) await this.setStateAsync(`${base}.climate.outside_temp`, signals.OutsideTemp);
@@ -247,9 +286,9 @@ export class StateManager {
 				await this.setStateAsync(`${base}.climate.is_climate_on`, signals.HvacPower !== 'HvacPowerStateOff');
 
 			if (signals.BatteryLevel !== undefined) await this.setStateAsync(`${base}.charge.battery_level`, signals.BatteryLevel);
-			if (signals.DetailedChargeState !== undefined) await this.setStateAsync(`${base}.charge.charging_state`, signals.DetailedChargeState);
+			if (signals.DetailedChargeState !== undefined) await this.setStateAsync(`${base}.charge.charging_state`, stripEnumPrefix(signals.DetailedChargeState, 'DetailedChargeState'));
 			if (signals.ChargeLimitSoc !== undefined) await this.setStateAsync(`${base}.charge.charge_limit_soc`, signals.ChargeLimitSoc);
-			if (signals.ChargeRateMilePerHour !== undefined) await this.setStateAsync(`${base}.charge.charge_rate`, signals.ChargeRateMilePerHour);
+			if (signals.ChargeRateMilePerHour !== undefined) await this.setStateAsync(`${base}.charge.charge_rate`, milesToKm(signals.ChargeRateMilePerHour));
 			if (signals.TimeToFullCharge !== undefined) await this.setStateAsync(`${base}.charge.time_to_full_charge`, signals.TimeToFullCharge);
 
 			if (signals.Locked !== undefined) await this.setStateAsync(`${base}.state.locked`, signals.Locked);

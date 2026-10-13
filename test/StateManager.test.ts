@@ -124,3 +124,70 @@ test('limits reach a writable state whose object an earlier version already crea
 
 	assert.partialDeepStrictEqual(objects.get('vehicles.VIN1.charge.charge_limit_soc').common, { name: 'Charge Limit', min: 50, max: 100 });
 });
+
+test('updateVehicleData converts REST miles to km and keeps Tesla short enum values', async () => {
+	const { adapter, states } = createFakeAdapter();
+	const stateManager = new StateManager(adapter);
+
+	await stateManager.updateVehicleData('VIN1', {
+		response: {
+			drive_state: { speed: 60, shift_state: 'D' },
+			charge_state: { charge_rate: 10, charging_state: 'Charging' },
+			vehicle_state: { odometer: 1000 },
+		},
+	});
+
+	assert.equal(states.get('vehicles.VIN1.location.speed'), 96.56);
+	assert.equal(states.get('vehicles.VIN1.charge.charge_rate'), 16.09);
+	assert.equal(states.get('vehicles.VIN1.drive.odometer'), 1609.34);
+	assert.equal(states.get('vehicles.VIN1.charge.charging_state'), 'Charging');
+	assert.equal(states.get('vehicles.VIN1.drive.shift_state'), 'D');
+});
+
+test('updateVehicleDataFromSignals converts streamed miles to km and writes the same short enum values as REST (regression: wrote raw miles and prefixed enum names)', async () => {
+	const { adapter, states } = createFakeAdapter();
+	const stateManager = new StateManager(adapter);
+
+	await stateManager.updateVehicleDataFromSignals('VIN1', {
+		VehicleSpeed: 60,
+		ChargeRateMilePerHour: 10,
+		Odometer: 1000,
+		DetailedChargeState: 'DetailedChargeStateCharging',
+		Gear: 'ShiftStateD',
+	});
+
+	assert.equal(states.get('vehicles.VIN1.location.speed'), 96.56);
+	assert.equal(states.get('vehicles.VIN1.charge.charge_rate'), 16.09);
+	assert.equal(states.get('vehicles.VIN1.drive.odometer'), 1609.34);
+	assert.equal(states.get('vehicles.VIN1.charge.charging_state'), 'Charging');
+	assert.equal(states.get('vehicles.VIN1.drive.shift_state'), 'D');
+});
+
+test('updateVehicleDataFromSignals writes null for a cleared distance signal instead of converting it', async () => {
+	const { adapter, states } = createFakeAdapter();
+	const stateManager = new StateManager(adapter);
+
+	await stateManager.updateVehicleDataFromSignals('VIN1', { Odometer: null, VehicleSpeed: null, Gear: null });
+
+	assert.equal(states.get('vehicles.VIN1.drive.odometer'), null);
+	assert.equal(states.get('vehicles.VIN1.location.speed'), 0);
+	assert.equal(states.get('vehicles.VIN1.drive.shift_state'), null);
+});
+
+test('charging_state and shift_state list their values, and charge_rate is not a power state, also on an existing install', async () => {
+	const { adapter, objects } = createFakeAdapter();
+	objects.set('vehicles.VIN1.charge.charge_rate', {
+		type: 'state',
+		common: { name: 'Charge Rate', type: 'number', role: 'value.power', read: true, write: false, def: 0, unit: 'km/h' },
+		native: {},
+	});
+
+	await new StateManager(adapter).createVehicleStates({ vin: 'VIN1', display_name: 'Test Car' });
+
+	const common = (id: string) => objects.get(id).common;
+	assert.equal(common('vehicles.VIN1.charge.charge_rate').role, 'value');
+	assert.deepEqual(Object.keys(common('vehicles.VIN1.charge.charging_state').states).sort(), [
+		'Calibrating', 'Charging', 'Complete', 'Disconnected', 'NoPower', 'Starting', 'Stopped', 'Unknown',
+	]);
+	assert.deepEqual(Object.keys(common('vehicles.VIN1.drive.shift_state').states).sort(), ['D', 'Invalid', 'N', 'P', 'R', 'SNA', 'Unknown']);
+});
